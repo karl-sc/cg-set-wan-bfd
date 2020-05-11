@@ -8,13 +8,24 @@ inputted text and modify their BFD value to either Aggressive or Non-Aggressive.
 
 Example Usage:
 
-    python3 cg-set-wan-bfd.py --authtoken ../mytoken.txt -m "lte" -b non-aggressive
+    python3 cg-set-wan-bfd.py --authtoken ../mytoken.txt -m "lte" -b non-aggressive -w off -l off
 
-This will set all wan interfaces containing the text LTE to a BFD Mode of Non-Aggressive
+This will set all wan interfaces containing the text LTE to a BFD Mode of Non-Aggressive and disable LQM and BWM
 
 Matching is done in a case insensitive fasion.
 
 The script will confirm the changes prior to making them
+
+Additional Options:
+- BW Monitoring (BWM)
+    You may Optionally disable BW Monitoring to reduce bandwidth usage on metered links
+    such as LTE connections. Pass the --bwm or -w argument with the parameter "off".
+    To re-enable you may pass the parameter "on"
+- Link Quality Monitoring (LQM)
+    You may Optionally disable Link Quality Monitoring to reduce bandwidth usage on metered links
+    such as LTE connections. Pass the --lqm or -l argument with the parameter "off".
+    To re-enable you may pass the parameter "on"
+    
 
 Authentication:
     This script will attempt to authenticate with the CloudGenix controller
@@ -53,6 +64,11 @@ def parse_arguments():
                     help='The text to match on', required=True)
     parser.add_argument('--bfd-mode', '-b', metavar='bfdmode', type=str, choices=['aggressive','non_aggressive'],
                     help='The new mode to set (aggressive or nonaggressive)', required=True)
+
+    parser.add_argument('--lqm', '-l', metavar='lqm', type=str, choices=['nochange','on', 'off'],
+                    help='Whether or not to change the state of Link Quality Monitoring (On, Off, No-Change)', default='nochange')
+    parser.add_argument('--bwm', '-w', metavar='bwm', type=str, choices=['nochange','on', 'off'],
+                    help='Whether or not to change the state of Bandwidth Monitoring (On, Off, No-Change)', default='nochange')
     args = parser.parse_args()
     CLIARGS.update(vars(args)) ##ASSIGN ARGUMENTS to our DICT
 
@@ -114,6 +130,8 @@ def go():
     global exclude_hub_sites
     bfdmode = CLIARGS['bfd_mode']
     match_text = CLIARGS['matchtext']
+    change_lqm = CLIARGS['lqm']
+    change_bwm = CLIARGS['bwm']
     ####CODE GOES BELOW HERE#########
     resp = cgx_session.get.tenants()
     if resp.cgx_status:
@@ -162,9 +180,15 @@ def go():
                                 print("  Circuit Label       :",wan_label_dict[interface['label_id']]['label'])
                                 print("  Circuit Description :",wan_label_dict[interface['label_id']]['description'])
                                 print("  Circuit BFD MODE    :",interface['bfd_mode'])
+                                print("  Circuit LQM Enabled :",interface['lqm_enabled'])
+                                print("  Circuit BWM MODE    :",interface['bw_config_mode'])
                                 
                                 print("")
-        if(verify_change("This will change all circuits found above to a BFD Mode of " + str(bfdmode) + ", are you sure")):
+        addended_prompt = ""
+        if (change_lqm != "nochange"): addended_prompt += ", change LQM,"
+        if (change_bwm != "nochange"): addended_prompt += ", change BWM,"
+
+        if(verify_change("This will change all circuits found above to a BFD Mode of " + str(bfdmode) + addended_prompt +" are you sure")):
             print("Changing Sites:")
             print("")
             
@@ -174,6 +198,32 @@ def go():
                 site_id = matched_wan_labels[waninterface]['site_id']
                 waninterface_id = waninterface
                 put_data = matched_wan_labels[waninterface]['data']
+                
+                if (change_lqm == "on"):
+                    print("      Current LQM Mode", matched_wan_labels[waninterface]['data']['lqm_enabled'],"changing to",change_lqm)
+                    put_data['lqm_enabled'] = "true"
+                if (change_lqm == "off"):
+                    print("      Current LQM Mode", matched_wan_labels[waninterface]['data']['lqm_enabled'],"changing to",change_lqm)
+                    put_data['lqm_enabled'] = "false"
+                current_bwm_state = "unknown"
+                if (matched_wan_labels[waninterface]['data']['bw_config_mode'] == "manual_bwm_disabled"):
+                    current_bwm_state = "Off"
+                elif (matched_wan_labels[waninterface]['data']['bw_config_mode'] == "manual"):
+                    current_bwm_state = "On"
+                
+                if (change_bwm == "on"):
+                    if (current_bwm_state == "unknown"):
+                        print("      Ignoring BWM Mode change due to unknown state: ", matched_wan_labels[waninterface]['data']['bw_config_mode'])
+                    else:
+                        print("      Current BWM Mode", matched_wan_labels[waninterface]['data']['bw_config_mode'],"changing to",change_bwm)
+                        put_data['bw_config_mode'] = "manual"
+                if (change_bwm == "off" and current_bwm_state != "unknown"):
+                    if (current_bwm_state == "unknown"):
+                        print("      Ignoring BWM Mode change due to unknown state: ", matched_wan_labels[waninterface]['data']['bw_config_mode'])
+                    else:
+                        print("      Current BWM Mode", matched_wan_labels[waninterface]['data']['bw_config_mode'],"changing to",change_bwm)
+                        put_data['bw_config_mode'] = "manual_bwm_disabled"
+
                 change_wan_bfd_resp = cgx_session.put.waninterfaces(site_id, waninterface_id, put_data)
                 if (change_wan_bfd_resp):
                     print(" Success, BFD Mode now", bfdmode)
